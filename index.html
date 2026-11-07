@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud Photo Drive</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Google Fonts: Inter -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#eff6ff',
+              100: '#dbeafe',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+    .glass-panel {
+      background: rgba(30, 41, 59, 0.7);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+  </style>
+
+  <!-- Supabase JavaScript SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- APPLICATION CORE SCRIPT -->
+  <script>
+    // Add your Supabase Project URL and Publishable Key below.
+    // Never use a Supabase secret/service_role key in browser code.
+    const SUPABASE_URL = "https://qfhshaxsgbrulrdwjedz.supabase.co";
+const SUPABASE_KEY = "sb_publishable_iJHTfuesuOBRucRhu7uWeQ_MRB_Jqcr";
+
+const supabaseConfigured = Boolean(
+  window.supabase &&
+  SUPABASE_URL.startsWith("https://") &&
+  SUPABASE_KEY.startsWith("sb_publishable_")
+);
+
+const supabaseClient = supabaseConfigured
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
+  : null;
+
+if (!supabaseConfigured) {
+  console.warn("Supabase setup is incomplete. Check your configuration.");
+}
+    // Global Application State Variable
+    window.state = {
+      currentUser: null,
+      authMode: 'login',
+      photos: [],
+      viewMode: 'grid',
+      activeFilter: '',
+      maxStorageMB: null
+    };
+
+    // Helper: Toast Notifications
+    window.showToast = function(message, type = 'info') {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+      const toast = document.createElement('div');
+      
+      const colors = {
+        success: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400',
+        error: 'bg-red-500/10 border-red-500/30 text-red-400',
+        info: 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+      };
+
+      toast.className = `px-4 py-3 rounded-xl border backdrop-blur-md shadow-xl text-xs font-medium transition-all duration-300 pointer-events-auto flex items-center gap-2 ${colors[type] || colors.info}`;
+      toast.innerHTML = `<span>${message}</span>`;
+      
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    };
+
+    // Auth Switch Handler
+    window.switchAuthTab = function(mode) {
+      window.state.authMode = mode;
+      const loginTab = document.getElementById('tab-login');
+      const signupTab = document.getElementById('tab-signup');
+      const btnText = document.getElementById('auth-btn-text');
+
+      if (!loginTab || !signupTab || !btnText) return;
+
+      if (mode === 'login') {
+        loginTab.className = "flex-1 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 transition-all shadow-sm";
+        signupTab.className = "flex-1 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-white transition-all";
+        btnText.textContent = 'Sign In';
+      } else {
+        signupTab.className = "flex-1 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 transition-all shadow-sm";
+        loginTab.className = "flex-1 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-white transition-all";
+        btnText.textContent = 'Create Account';
+      }
+    };
+
+    // Supabase email/password authentication
+    window.handleAuthSubmit = async function(event) {
+      if (event) event.preventDefault();
+      const emailInput = document.getElementById('auth-email');
+      const passwordInput = document.getElementById('auth-password');
+      const submitButton = document.getElementById('auth-submit-btn');
+      const email = emailInput ? emailInput.value.trim().toLowerCase() : '';
+      const password = passwordInput ? passwordInput.value : '';
+
+      if (!email || !password) {
+        window.showToast('Please provide both email and password.', 'error');
+        return;
+      }
+
+      if (submitButton) submitButton.disabled = true;
+      try {
+        let result;
+        if (window.state.authMode === 'signup') {
+          result = await supabaseClient.auth.signUp({ email, password });
+          if (result.error) throw result.error;
+          if (!result.data.session) {
+            window.showToast('Account created. Check your email to confirm it, then sign in.', 'success');
+            window.switchAuthTab('login');
+            return;
+          }
+        } else {
+          result = await supabaseClient.auth.signInWithPassword({ email, password });
+          if (result.error) throw result.error;
+        }
+
+        const user = result.data.user;
+        if (!user) throw new Error('Authentication succeeded, but no user profile was returned.');
+        window.state.currentUser = { id: user.id, email: user.email };
+        window.showToast(window.state.authMode === 'signup' ? 'Account created successfully!' : 'Signed in successfully!', 'success');
+        window.showDashboard();
+      } catch (error) {
+        console.error('Authentication error:', error);
+        window.showToast(error.message || 'Authentication failed. Please try again.', 'error');
+      } finally {
+        if (submitButton) submitButton.disabled = false;
+      }
+    };
+
+    // Cloud storage requires a signed-in account; guest mode is disabled.
+    window.handleGuestLogin = function() {
+      window.showToast('Please sign in or create an account to use cloud storage.', 'info');
+    };
+
+    window.handleLogout = async function() {
+      try {
+        const { error } = await supabaseClient.auth.signOut();
+        if (error) throw error;
+        window.state.currentUser = null;
+        window.state.photos = [];
+        const mainScreen = document.getElementById('main-screen');
+        const authScreen = document.getElementById('auth-screen');
+        if (mainScreen) mainScreen.classList.add('hidden');
+        if (authScreen) authScreen.classList.remove('hidden');
+        window.renderGallery();
+        window.showToast('Logged out successfully.', 'info');
+      } catch (error) {
+        console.error('Logout error:', error);
+        window.showToast(error.message || 'Could not log out.', 'error');
+      }
+    };
+
+    // Dashboard Switcher
+    window.showDashboard = function() {
+      const authScreen = document.getElementById('auth-screen');
+      const mainScreen = document.getElementById('main-screen');
+      const userEmail = document.getElementById('user-email');
+      const userAvatar = document.getElementById('user-avatar');
+      if (!window.state.currentUser) return;
+      if (authScreen) authScreen.classList.add('hidden');
+      if (mainScreen) mainScreen.classList.remove('hidden');
+      if (userEmail) userEmail.textContent = window.state.currentUser.email;
+      if (userAvatar) userAvatar.textContent = (window.state.currentUser.email || 'U').charAt(0).toUpperCase();
+      window.loadUserPhotos();
+    };
+
+    window.escapeHTML = function(value) {
+      return String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[character]));
+    };
+
+    window.getDisplayName = function(storageName) {
+      const splitAt = storageName.indexOf('__');
+      return splitAt >= 0 ? storageName.slice(splitAt + 2) : storageName;
+    };
+
+    // List this signed-in user's files and create temporary preview/download links.
+    window.loadUserPhotos = async function() {
+      if (!window.state.currentUser) return;
+      try {
+        const userId = window.state.currentUser.id;
+        const { data: files, error } = await supabaseClient.storage
+          .from('photos').list(userId, { limit: 100, sortBy: { column: 'created_at', order: 'desc' } });
+        if (error) throw error;
+
+        const imageFiles = (files || []).filter(file => file.name && file.name !== '.emptyFolderPlaceholder');
+        const photos = await Promise.all(imageFiles.map(async file => {
+          const path = `${userId}/${file.name}`;
+          const { data: signed, error: urlError } = await supabaseClient.storage
+            .from('photos').createSignedUrl(path, 3600);
+          if (urlError) {
+            console.warn('Could not create preview URL for', file.name, urlError);
+            return null;
+          }
+          return {
+            id: file.name,
+            path,
+            name: window.getDisplayName(file.name),
+            size: Number(file.metadata?.size || 0),
+            dataUrl: signed.signedUrl,
+            timestamp: file.created_at ? new Date(file.created_at).toLocaleDateString() : 'Recently uploaded'
+          };
+        }));
+        window.state.photos = photos.filter(Boolean);
+        window.renderGallery();
+        window.updateStorageStats();
+      } catch (error) {
+        console.error('Photo loading error:', error);
+        window.showToast(error.message || 'Could not load cloud photos.', 'error');
+      }
+    };
+
+    window.savePhotoToDB = async function(file) {
+      if (!window.state.currentUser) throw new Error('Please sign in before uploading.');
+      const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-100) || 'photo';
+      const storageName = `${Date.now()}_${crypto.randomUUID()}__${cleanName}`;
+      const path = `${window.state.currentUser.id}/${storageName}`;
+      const { error } = await supabaseClient.storage.from('photos').upload(path, file, {
+        contentType: file.type || 'application/octet-stream',
+        upsert: false
+      });
+      if (error) throw error;
+      return path;
+    };
+
+    window.deletePhotoFromDB = async function(photoId) {
+      const photo = window.state.photos.find(item => item.id === photoId);
+      if (!photo || !window.state.currentUser) return;
+      const { error } = await supabaseClient.storage.from('photos').remove([photo.path]);
+      if (error) throw error;
+    };
+
+    // Upload & Drag-Drop Handlers
+    window.triggerFileInput = function() {
+      const fileInput = document.getElementById('file-input');
+      if (fileInput) fileInput.click();
+    };
+
+    window.handleFileSelect = function(event) {
+      const files = event.target.files;
+      if (files && files.length) {
+        Array.from(files).forEach(file => window.processUpload(file));
+      }
+    };
+
+    window.handleDragOver = function(event) {
+      event.preventDefault();
+      const dropzone = document.getElementById('dropzone');
+      if (dropzone) dropzone.classList.add('border-blue-500', 'bg-blue-500/5');
+    };
+
+    window.handleDragLeave = function(event) {
+      event.preventDefault();
+      const dropzone = document.getElementById('dropzone');
+      if (dropzone) dropzone.classList.remove('border-blue-500', 'bg-blue-500/5');
+    };
+
+    window.handleDrop = function(event) {
+      event.preventDefault();
+      const dropzone = document.getElementById('dropzone');
+      if (dropzone) dropzone.classList.remove('border-blue-500', 'bg-blue-500/5');
+      const files = event.dataTransfer.files;
+      if (files && files.length) {
+        Array.from(files).forEach(file => window.processUpload(file));
+      }
+    };
+
+    window.processUpload = async function(file) {
+      if (!file || !file.type.startsWith('image/')) {
+        window.showToast('Please upload a valid image file.', 'error');
+        return;
+      }
+      if (!window.state.currentUser) {
+        window.showToast('Please sign in before uploading.', 'error');
+        return;
+      }
+
+      const progressContainer = document.getElementById('upload-progress-container');
+      const progressBar = document.getElementById('upload-progress-bar');
+      const progressFilename = document.getElementById('upload-filename');
+      const progressPercent = document.getElementById('upload-percentage');
+      if (progressContainer) progressContainer.classList.remove('hidden');
+      if (progressFilename) progressFilename.textContent = file.name;
+      if (progressBar) progressBar.style.width = '15%';
+      if (progressPercent) progressPercent.textContent = 'Uploading…';
+
+      try {
+        const path = await window.savePhotoToDB(file);
+        if (progressBar) progressBar.style.width = '100%';
+        if (progressPercent) progressPercent.textContent = '100%';
+        window.showToast('Photo uploaded to cloud storage.', 'success');
+        await window.loadUserPhotos();
+      } catch (error) {
+        console.error('Upload error:', error);
+        window.showToast(error.message || 'Photo upload failed.', 'error');
+      } finally {
+        setTimeout(() => {
+          if (progressContainer) progressContainer.classList.add('hidden');
+          if (progressBar) progressBar.style.width = '0%';
+          if (progressPercent) progressPercent.textContent = '0%';
+        }, 500);
+        const input = document.getElementById('file-input');
+        if (input) input.value = '';
+      }
+    };
+
+    // Gallery Render Logic
+    window.toggleViewMode = function(mode) {
+      window.state.viewMode = mode;
+      const gridBtn = document.getElementById('view-grid-btn');
+      const listBtn = document.getElementById('view-list-btn');
+
+      if (mode === 'grid') {
+        if (gridBtn) gridBtn.className = "p-2 text-blue-400 bg-slate-800 rounded-lg border border-slate-700";
+        if (listBtn) listBtn.className = "p-2 text-slate-400 bg-slate-900 hover:text-white rounded-lg border border-slate-800";
+      } else {
+        if (listBtn) listBtn.className = "p-2 text-blue-400 bg-slate-800 rounded-lg border border-slate-700";
+        if (gridBtn) gridBtn.className = "p-2 text-slate-400 bg-slate-900 hover:text-white rounded-lg border border-slate-800";
+      }
+      window.renderGallery();
+    };
+
+    window.filterPhotos = function() {
+      const searchInput = document.getElementById('search-input');
+      window.state.activeFilter = searchInput ? searchInput.value.toLowerCase().trim() : '';
+      window.renderGallery();
+    };
+
+    window.renderGallery = function() {
+      const container = document.getElementById('gallery-grid');
+      const emptyState = document.getElementById('empty-state');
+      if (!container || !emptyState) return;
+
+      const filtered = window.state.photos.filter(p => p.name.toLowerCase().includes(window.state.activeFilter));
+
+      const photoSubtitle = document.getElementById('photo-count-subtitle');
+      if (photoSubtitle) photoSubtitle.textContent = `${filtered.length} photo${filtered.length === 1 ? '' : 's'} stored`;
+
+      if (filtered.length === 0) {
+        container.innerHTML = '';
+        emptyState.classList.remove('hidden');
+        return;
+      }
+      emptyState.classList.add('hidden');
+
+      if (window.state.viewMode === 'grid') {
+        container.className = "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4";
+        container.innerHTML = filtered.map(p => `
+          <div class="glass-panel rounded-2xl overflow-hidden border border-slate-800 group relative hover:border-slate-700 transition-all">
+            <div class="aspect-square bg-slate-900 overflow-hidden cursor-pointer" onclick="window.openLightbox(decodeURIComponent('${encodeURIComponent(p.id)}'))">
+              <img src="${window.escapeHTML(p.dataUrl)}" alt="${window.escapeHTML(p.name)}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy">
+            </div>
+            <div class="p-2.5 flex items-center justify-between gap-2">
+              <div class="truncate">
+                <p class="text-xs font-medium text-slate-200 truncate" title="${window.escapeHTML(p.name)}">${window.escapeHTML(p.name)}</p>
+                <p class="text-[10px] text-slate-500">${window.formatBytes(p.size)}</p>
+              </div>
+              <button onclick="window.confirmDeletePhoto(decodeURIComponent('${encodeURIComponent(p.id)}'))" class="p-1.5 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-slate-800 shrink-0">
+                <i class="fa-solid fa-trash-can text-xs"></i>
+              </button>
+            </div>
+          </div>
+        `).join('');
+      } else {
+        container.className = "flex flex-col space-y-2";
+        container.innerHTML = filtered.map(p => `
+          <div class="glass-panel p-3 rounded-xl border border-slate-800 flex items-center justify-between gap-4 hover:border-slate-700 transition-all">
+            <div class="flex items-center gap-3 overflow-hidden cursor-pointer flex-1" onclick="window.openLightbox(decodeURIComponent('${encodeURIComponent(p.id)}'))">
+              <div class="w-10 h-10 rounded-lg bg-slate-900 overflow-hidden shrink-0">
+                <img src="${window.escapeHTML(p.dataUrl)}" alt="${window.escapeHTML(p.name)}" class="w-full h-full object-cover">
+              </div>
+              <div class="truncate">
+                <p class="text-xs font-medium text-slate-200 truncate">${window.escapeHTML(p.name)}</p>
+                <p class="text-[10px] text-slate-500">${window.escapeHTML(p.timestamp)} • ${window.formatBytes(p.size)}</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="window.openLightbox(decodeURIComponent('${encodeURIComponent(p.id)}'))" class="p-2 text-slate-400 hover:text-blue-400 rounded-lg hover:bg-slate-800">
+                <i class="fa-solid fa-eye text-xs"></i>
+              </button>
+              <button onclick="window.confirmDeletePhoto(decodeURIComponent('${encodeURIComponent(p.id)}'))" class="p-2 text-slate-400 hover:text-red-400 rounded-lg hover:bg-slate-800">
+                <i class="fa-solid fa-trash-can text-xs"></i>
+              </button>
+            </div>
+          </div>
+        `).join('');
+      }
+    };
+
+    // Lightbox Functionality
+    window.openLightbox = function(photoId) {
+      const photo = window.state.photos.find(p => p.id === photoId);
+      if (!photo) return;
+
+      const img = document.getElementById('lightbox-img');
+      const title = document.getElementById('lightbox-title');
+      const date = document.getElementById('lightbox-date');
+      const size = document.getElementById('lightbox-size');
+      const downloadBtn = document.getElementById('lightbox-download');
+      const deleteBtn = document.getElementById('lightbox-delete');
+      const modal = document.getElementById('lightbox-modal');
+
+      if (img) img.src = photo.dataUrl;
+      if (title) title.textContent = photo.name;
+      if (date) date.textContent = photo.timestamp;
+      if (size) size.textContent = window.formatBytes(photo.size);
+      
+      if (downloadBtn) {
+        downloadBtn.href = photo.dataUrl;
+        downloadBtn.download = photo.name;
+      }
+
+      if (deleteBtn) {
+        deleteBtn.onclick = () => {
+          window.closeLightbox();
+          window.confirmDeletePhoto(photo.id);
+        };
+      }
+
+      if (modal) modal.classList.remove('hidden');
+    };
+
+    window.closeLightbox = function() {
+      const modal = document.getElementById('lightbox-modal');
+      if (modal) modal.classList.add('hidden');
+    };
+
+    window.confirmDeletePhoto = async function(photoId) {
+      if (!confirm('Are you sure you want to delete this photo from cloud storage?')) return;
+      try {
+        await window.deletePhotoFromDB(photoId);
+        window.state.photos = window.state.photos.filter(photo => photo.id !== photoId);
+        window.renderGallery();
+        window.updateStorageStats();
+        window.showToast('Photo deleted from cloud storage.', 'success');
+      } catch (error) {
+        console.error('Delete error:', error);
+        window.showToast(error.message || 'Could not delete this photo.', 'error');
+      }
+    };
+
+    // Show actual loaded file usage; do not imply a made-up storage quota.
+    window.updateStorageStats = function() {
+      const totalBytes = window.state.photos.reduce((total, photo) => total + photo.size, 0);
+      const percentageElem = document.getElementById('storage-percentage');
+      const barElem = document.getElementById('storage-bar');
+      const sizeElem = document.getElementById('storage-size-used');
+      if (percentageElem) percentageElem.textContent = 'Cloud';
+      if (barElem) barElem.style.width = '100%';
+      if (sizeElem) sizeElem.textContent = window.formatBytes(totalBytes);
+    };
+
+    window.formatBytes = function(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    };
+
+    // Restore the Supabase session when the page opens and track sign-in changes.
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        if (!supabaseClient) throw new Error('Add your Supabase Project URL and Publishable Key near the top of this file.');
+        const { data, error } = await supabaseClient.auth.getSession();
+        if (error) throw error;
+        if (data.session?.user) {
+          window.state.currentUser = {
+            id: data.session.user.id,
+            email: data.session.user.email
+          };
+          window.showDashboard();
+        }
+
+        supabaseClient.auth.onAuthStateChange((event, session) => {
+          if (event === 'SIGNED_OUT' || !session?.user) {
+            window.state.currentUser = null;
+            window.state.photos = [];
+            const mainScreen = document.getElementById('main-screen');
+            const authScreen = document.getElementById('auth-screen');
+            if (mainScreen) mainScreen.classList.add('hidden');
+            if (authScreen) authScreen.classList.remove('hidden');
+            window.renderGallery();
+          } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+            window.state.currentUser = { id: session.user.id, email: session.user.email };
+            window.showDashboard();
+          }
+        });
+      } catch (error) {
+        console.error('Supabase startup error:', error);
+        window.showToast('Could not connect to Supabase. Check your project URL and publishable key.', 'error');
+      }
+    });
+  </script>
+</head>
+<body class="h-full font-sans antialiased bg-slate-950 text-slate-100 flex flex-col overflow-hidden">
+
+  <!-- APP CONTAINER -->
+  <div id="app" class="flex flex-col h-full w-full relative">
+
+    <!-- TOAST CONTAINER -->
+    <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <!-- AUTH SCREEN -->
+    <div id="auth-screen" class="fixed inset-0 z-40 bg-slate-950 flex items-center justify-center p-4">
+      <div class="glass-panel w-full max-w-md p-8 rounded-2xl shadow-2xl border border-slate-800 relative overflow-hidden">
+        <div class="absolute -top-10 -right-10 w-32 h-32 bg-blue-600/20 rounded-full blur-2xl pointer-events-none"></div>
+        <div class="absolute -bottom-10 -left-10 w-32 h-32 bg-indigo-600/20 rounded-full blur-2xl pointer-events-none"></div>
+        
+        <div class="text-center mb-8">
+          <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-lg shadow-blue-500/30 mb-4">
+            <i class="fa-solid fa-cloud text-2xl"></i>
+          </div>
+          <h1 class="text-2xl font-bold text-white tracking-tight">Cloud Photo Drive</h1>
+          <p class="text-xs text-slate-400 mt-1">Your unified high-speed photo storage</p>
+        </div>
+
+        <!-- Auth Tabs -->
+        <div class="flex bg-slate-900/80 p-1 rounded-xl mb-6 border border-slate-800">
+          <button id="tab-login" onclick="window.switchAuthTab('login')" class="flex-1 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 transition-all shadow-sm">Sign In</button>
+          <button id="tab-signup" onclick="window.switchAuthTab('signup')" class="flex-1 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-white transition-all">Sign Up</button>
+        </div>
+
+        <!-- Auth Form -->
+        <form id="auth-form" onsubmit="window.handleAuthSubmit(event)" class="space-y-4">
+          <div>
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Email Address</label>
+            <div class="relative">
+              <i class="fa-solid fa-envelope absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+              <input type="email" id="auth-email" required placeholder="user@example.com" class="w-full bg-slate-900/90 border border-slate-700/80 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all">
+            </div>
+          </div>
+          
+          <div>
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Password</label>
+            <div class="relative">
+              <i class="fa-solid fa-lock absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+              <input type="password" id="auth-password" required minlength="6" placeholder="••••••••" class="w-full bg-slate-900/90 border border-slate-700/80 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all">
+            </div>
+          </div>
+
+          <button type="submit" id="auth-submit-btn" class="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium rounded-xl shadow-lg shadow-blue-600/25 transition-all text-sm flex items-center justify-center gap-2 mt-6">
+            <span id="auth-btn-text">Sign In</span>
+            <i class="fa-solid fa-arrow-right text-xs"></i>
+          </button>
+        </form>
+
+        <div class="relative my-6 text-center">
+          <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-slate-800"></div></div>
+          <span class="relative bg-slate-950 px-3 text-xs text-slate-500">OR</span>
+        </div>
+
+        <button onclick="window.handleGuestLogin()" class="w-full py-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-medium rounded-xl transition-all text-sm flex items-center justify-center gap-2">
+          <i class="fa-solid fa-user-ninja text-slate-400"></i>
+          <span>Cloud storage requires sign in</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- MAIN APP DASHBOARD -->
+    <div id="main-screen" class="flex h-full w-full overflow-hidden hidden">
+      
+      <!-- SIDEBAR -->
+      <aside class="w-64 bg-slate-900/60 border-r border-slate-800/80 flex flex-col justify-between hidden md:flex shrink-0">
+        <div class="p-5">
+          <!-- Logo -->
+          <div class="flex items-center gap-3 mb-8">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
+              <i class="fa-solid fa-cloud text-lg"></i>
+            </div>
+            <div>
+              <h2 class="font-bold text-white text-base leading-tight">Cloud Drive</h2>
+              <p class="text-[11px] text-slate-400">Cloud Storage</p>
+            </div>
+          </div>
+
+          <!-- Navigation Links -->
+          <nav class="space-y-1">
+            <a href="#" class="flex items-center gap-3 px-3.5 py-2.5 rounded-xl bg-blue-600/10 text-blue-400 font-medium text-sm border border-blue-500/20">
+              <i class="fa-solid fa-folder-open text-blue-500"></i>
+              <span>My Cloud Storage</span>
+            </a>
+          </nav>
+        </div>
+
+        <!-- Storage Info Card -->
+        <div class="p-5">
+          <div class="glass-panel p-4 rounded-2xl border border-slate-800">
+            <div class="flex items-center justify-between text-xs mb-2">
+              <span class="text-slate-400 font-medium">Storage Used</span>
+              <span id="storage-percentage" class="text-blue-400 font-bold">0%</span>
+            </div>
+            <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden mb-3">
+              <div id="storage-bar" class="bg-gradient-to-r from-blue-500 to-indigo-500 h-full w-0 transition-all duration-500"></div>
+            </div>
+            <div class="flex justify-between items-center text-[11px] text-slate-400">
+              <span id="storage-size-used">0 Bytes</span>
+              <span>in cloud storage</span>
+            </div>
+          </div>
+
+          <!-- User Info & Logout -->
+          <div class="mt-4 pt-4 border-t border-slate-800/80 flex items-center justify-between">
+            <div class="flex items-center gap-2.5 overflow-hidden">
+              <div class="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold shrink-0" id="user-avatar">
+                U
+              </div>
+              <div class="truncate">
+                <p class="text-xs font-semibold text-white truncate" id="user-email">user@drive.com</p>
+                <p class="text-[10px] text-slate-500">Authenticated</p>
+              </div>
+            </div>
+            <button onclick="window.handleLogout()" class="p-2 text-slate-400 hover:text-red-400 transition-colors rounded-lg hover:bg-slate-800" title="Logout">
+              <i class="fa-solid fa-right-from-bracket text-sm"></i>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- MAIN CONTENT AREA -->
+      <main class="flex-1 flex flex-col h-full bg-slate-950 overflow-hidden">
+        
+        <!-- TOP HEADER BAR -->
+        <header class="h-16 border-b border-slate-800/80 px-4 md:px-8 flex items-center justify-between gap-4 shrink-0 bg-slate-950/80 backdrop-blur-md">
+          
+          <!-- Search Bar -->
+          <div class="flex-1 max-w-md relative">
+            <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+            <input type="text" id="search-input" oninput="window.filterPhotos()" placeholder="Search photos by title..." class="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all">
+          </div>
+
+          <!-- Actions Header -->
+          <div class="flex items-center gap-3">
+            <button onclick="window.triggerFileInput()" class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-medium transition-all shadow-lg shadow-blue-600/20">
+              <i class="fa-solid fa-cloud-arrow-up"></i>
+              <span class="hidden sm:inline">Upload Photo</span>
+            </button>
+            <input type="file" id="file-input" accept="image/*" class="hidden" onchange="window.handleFileSelect(event)">
+
+            <!-- Mobile Logout -->
+            <button onclick="window.handleLogout()" class="md:hidden p-2 text-slate-400 hover:text-red-400 transition-colors rounded-lg hover:bg-slate-900" title="Logout">
+              <i class="fa-solid fa-right-from-bracket text-base"></i>
+            </button>
+          </div>
+        </header>
+
+        <!-- DASHBOARD CONTAINER -->
+        <div class="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
+          
+          <!-- DROPZONE / UPLOAD SECTION -->
+          <div id="dropzone" 
+               ondragover="window.handleDragOver(event)" 
+               ondragleave="window.handleDragLeave(event)" 
+               ondrop="window.handleDrop(event)" 
+               onclick="window.triggerFileInput()"
+               class="glass-panel border-2 border-dashed border-slate-700/80 hover:border-blue-500/80 rounded-2xl p-6 text-center cursor-pointer transition-all duration-300 group">
+            
+            <div class="max-w-xs mx-auto flex flex-col items-center">
+              <div class="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center text-slate-400 group-hover:text-blue-400 group-hover:scale-110 transition-all mb-3 border border-slate-800">
+                <i class="fa-solid fa-cloud-arrow-up text-xl"></i>
+              </div>
+              <p class="text-sm font-semibold text-slate-200">Click to upload or drag & drop</p>
+              <p class="text-xs text-slate-500 mt-1">PNG, JPG, WEBP or GIF</p>
+            </div>
+            
+            <!-- Upload Progress Bar -->
+            <div id="upload-progress-container" class="hidden mt-4 max-w-sm mx-auto text-left">
+              <div class="flex justify-between text-xs text-slate-400 mb-1">
+                <span id="upload-filename" class="truncate max-w-[200px]">Uploading...</span>
+                <span id="upload-percentage">0%</span>
+              </div>
+              <div class="w-full bg-slate-900 h-2 rounded-full overflow-hidden border border-slate-800">
+                <div id="upload-progress-bar" class="bg-blue-600 h-full w-0 transition-all duration-200"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- GALLERY SECTION -->
+          <div>
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                  <i class="fa-regular fa-folder text-blue-500"></i>
+                  <span>My Cloud Storage</span>
+                </h3>
+                <p class="text-xs text-slate-400 mt-0.5" id="photo-count-subtitle">0 photos stored</p>
+              </div>
+
+              <div class="flex items-center gap-2">
+                <button onclick="window.toggleViewMode('grid')" id="view-grid-btn" class="p-2 text-blue-400 bg-slate-800 rounded-lg border border-slate-700">
+                  <i class="fa-solid fa-grip-vertical text-sm"></i>
+                </button>
+                <button onclick="window.toggleViewMode('list')" id="view-list-btn" class="p-2 text-slate-400 bg-slate-900 hover:text-white rounded-lg border border-slate-800">
+                  <i class="fa-solid fa-list text-sm"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Photos Grid/List View -->
+            <div id="gallery-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+              <!-- Rendered dynamically -->
+            </div>
+
+            <!-- Empty State -->
+            <div id="empty-state" class="hidden text-center py-16 glass-panel rounded-2xl border border-slate-800">
+              <div class="w-16 h-16 rounded-full bg-slate-900 flex items-center justify-center mx-auto mb-4 text-slate-600">
+                <i class="fa-regular fa-images text-2xl"></i>
+              </div>
+              <h4 class="text-base font-semibold text-slate-300">No photos found</h4>
+              <p class="text-xs text-slate-500 max-w-xs mx-auto mt-1">Upload your first photo to view and manage it in your cloud storage.</p>
+              <button onclick="window.triggerFileInput()" class="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-medium transition-all">
+                Upload Now
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </main>
+    </div>
+
+    <!-- LIGHTBOX MODAL -->
+    <div id="lightbox-modal" class="fixed inset-0 z-50 bg-black/90 backdrop-blur-md hidden flex items-center justify-center p-4">
+      <button onclick="window.closeLightbox()" class="absolute top-4 right-4 text-slate-400 hover:text-white text-2xl w-10 h-10 flex items-center justify-center rounded-full bg-slate-900/80 border border-slate-800">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+
+      <div class="max-w-4xl w-full flex flex-col md:flex-row items-center gap-6 bg-slate-900/90 p-4 rounded-2xl border border-slate-800 max-h-[90vh] overflow-hidden">
+        <div class="flex-1 flex items-center justify-center overflow-hidden h-[50vh] md:h-[70vh] w-full bg-black/40 rounded-xl">
+          <img id="lightbox-img" src="" alt="Preview" class="max-h-full max-w-full object-contain rounded-lg">
+        </div>
+        <div class="w-full md:w-80 flex flex-col justify-between shrink-0 h-full p-2">
+          <div>
+            <h3 id="lightbox-title" class="font-semibold text-white text-base truncate mb-2">Photo Name</h3>
+            <div class="space-y-2 text-xs text-slate-400 border-t border-b border-slate-800 py-3 my-3">
+              <div class="flex justify-between">
+                <span>Upload Date:</span>
+                <span id="lightbox-date" class="text-slate-200">--</span>
+              </div>
+              <div class="flex justify-between">
+                <span>File Size:</span>
+                <span id="lightbox-size" class="text-slate-200">--</span>
+              </div>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <a id="lightbox-download" download class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-xl text-center transition-all flex items-center justify-center gap-2">
+              <i class="fa-solid fa-download"></i>
+              <span>Download</span>
+            </a>
+            <button id="lightbox-delete" class="px-4 py-2.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 text-xs font-medium rounded-xl transition-all flex items-center justify-center">
+              <i class="fa-solid fa-trash-can"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
